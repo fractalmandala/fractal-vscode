@@ -15,7 +15,7 @@ import { ActionListItemKind, IActionListDelegate, IActionListItem } from '../../
 import { IProviderSessionType, ISessionsManagementService } from '../../../services/sessions/common/sessionsManagement.js';
 import { ISessionsProvidersService } from '../../../services/sessions/browser/sessionsProvidersService.js';
 import { autorun, IObservable, observableValue } from '../../../../base/common/observable.js';
-import { ISession, SessionStatus } from '../../../services/sessions/common/session.js';
+import { ISession, ISessionType, SessionStatus } from '../../../services/sessions/common/session.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { isWeb } from '../../../../base/common/platform.js';
 import { isEqual } from '../../../../base/common/resources.js';
@@ -65,6 +65,16 @@ interface IStoredSessionTypePick {
 
 /** Default telemetry source used when the picker serves the New Session composer. */
 const DEFAULT_TELEMETRY_SOURCE = 'NewChatSessionTypePicker';
+
+/**
+ * Fork customization: session types this build never offers. The fork is
+ * BYOK-only (no GitHub Copilot sign-in), so the Copilot CLI harness is hidden
+ * from the New Chat picker. The fallback logic in {@link SessionTypePicker}
+ * then reseats the stored pick onto the first offered type (Local chat).
+ */
+function isForkHiddenSessionType(sessionType: ISessionType): boolean {
+	return sessionType.id === 'copilotcli' || sessionType.chatSessionType === 'agent-host-copilotcli';
+}
 
 /**
  * Configures how the picker behaves when reused outside the New Session
@@ -211,15 +221,22 @@ export class SessionTypePicker extends Disposable {
 	 * is set (see {@link setFolderSource}), otherwise from the active session.
 	 */
 	protected _resolveFolderSessionTypes(): IProviderSessionType[] {
+		let types: IProviderSessionType[];
 		if (this._folderSource) {
 			if (this._quickChatSource?.get()) {
-				return this.sessionsManagementService.getQuickChatSessionTypes();
+				types = this.sessionsManagementService.getQuickChatSessionTypes();
+			} else {
+				const folderUri = this._folderSource.get();
+				types = folderUri ? this.sessionsManagementService.getSessionTypesForFolder(folderUri) : [];
 			}
-			const folderUri = this._folderSource.get();
-			return folderUri ? this.sessionsManagementService.getSessionTypesForFolder(folderUri) : [];
+		} else {
+			const session = this._session.get();
+			types = session ? this._sessionTypesForSession(session) : [];
 		}
-		const session = this._session.get();
-		return session ? this._sessionTypesForSession(session) : [];
+		// Fork customization: this build is BYOK-only and never signs in to
+		// GitHub Copilot, so hide the Copilot CLI harness (id `copilotcli`,
+		// chat contribution `agent-host-copilotcli`) from the New Chat picker.
+		return types.filter(t => !isForkHiddenSessionType(t.sessionType));
 	}
 
 	/** The pick to display for the current source: the active session's type, otherwise the folder or stored default. */

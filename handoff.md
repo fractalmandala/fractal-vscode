@@ -35,6 +35,33 @@ platform layer.
   off. Posts to the user's `:4747` agentation server (off-limits — see Boundaries). Verified
   on both surfaces; the user leaves annotations there and the agent reads `GET /pending`.
 
+## Status after 2026-08-09 session 2 — Copilot hiding + production build + branding
+
+- **Copilot session type hidden (BYOK-only stance).** The user asked what the "Start
+  session with Copilot" slot in the New Chat widget was and said they didn't want it. It's
+  the Agent Host Copilot CLI harness (`agent-host-copilotcli`, label "Copilot"), which
+  requires a GitHub Copilot account. Filtered out of both picker surfaces:
+  - `src/vs/sessions/contrib/chat/browser/sessionTypePicker.ts` — `isForkHiddenSessionType()`
+    excludes `copilotcli` / `agent-host-copilotcli`; the picker's `_offeredPick` fallback
+    then reseats a stored Copilot pick onto the first offered type.
+  - `src/vs/workbench/contrib/chat/browser/widget/input/sessionTargetPickerActionItem.ts` —
+    excludes `AgentSessionProviders.AgentHostCopilot` from the main chat harness picker.
+  - Recompile + desktop restart verified clean. BYOK Local chat is untouched.
+- **Production build works.** `npx gulp vscode-darwin-arm64` builds the full app
+  (`VSCode-darwin-arm64/Code - OSS.app`, app version `1.133.0` from package.json).
+  - Gotcha: first run can fail with `ENOENT: lstat .../extensions/copilot/node_modules/@github/copilot/shims.txt`
+    — a race between the copilot extension's postinstall (which materializes the SDK and
+    deletes `shims.txt`) and vsce/gulp globbing the same tree. Re-running the task succeeds
+    once `@github/copilot` is fully materialized; the isolated
+    `npx gulp compile-copilot-extension-build` also passes.
+- **DMG:** package the built app with plain `hdiutil` (VS Code's own create-dmg needs a
+  dmgbuild venv): `hdiutil create -volname "Fractal VS Code" -srcfolder VSCode-darwin-arm64/Code - OSS.app -ov -format UDZO Fractal-VS-Code.dmg`.
+- **Branding — app icon is now `logomotif.png`** (user-provided, 165×165, in repo root):
+  rendered to `resources/darwin/code.icns` (iconset via sips + iconutil),
+  `resources/linux/code.png` (512), and `resources/win32/code.ico` (PNG-in-ICO).
+- **Docs rewritten:** README.md (fork + changes-vs-original), AGENTS.md (fork agent
+  instructions), handoff.md (this file). LICENSE.txt kept verbatim (upstream MIT).
+
 ## Where things live
 
 - **Fork (target):** `/Users/amrit/fractal-vscode` — clone of `microsoft/vscode` (shallow,
@@ -115,6 +142,10 @@ annotation overlay gate).
 - **Context scope:** open-editor context only; anything beyond requires an explicit user toggle
   per message.
 - **No pushes / no commits** without explicit go-ahead — *except* this session pushed
-  `fractalmandala/fractal-vscode` (private) at the user's request; the `upstream` remote is
+  `fractalmandala/fractal-vscode` (private) at the user's request, and the user explicitly
+  asked for the docs+feature commit on 2026-08-09 session 2; the `upstream` remote is
   `microsoft/vscode` and must never receive a push.
 - The `:4747` agentation server and the user's own processes are off-limits.
+- **Desktop relaunch pattern:** the agent shell's timeout reaps the whole process group, so
+  launching `./scripts/code.sh` via `subprocess.Popen(..., start_new_session=True)` is the
+  reliable way to keep the Electron app alive.

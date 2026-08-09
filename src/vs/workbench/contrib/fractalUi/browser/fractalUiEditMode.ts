@@ -1,45 +1,43 @@
 /*---------------------------------------------------------------------------------------------
  *  Fractal — UI Edit Mode (dev-only).
  *
- *  Enter the mode (floating "🎨 UI Edit" button or the command), click any element in the
- *  workbench, and edit its look live: background/text/border colors, border width + radius,
- *  padding, font size/weight — and swap codicon glyphs for icons. Changes are applied via an
+ *  Toggle from the status bar ("🎨 UI Edit", left side) or the command palette
+ *  ("Fractal: Toggle UI Edit Mode"). While active, click any element in the workbench to
+ *  restyle it live: background/text/border colors, border width + radius, padding (each
+ *  with per-side control), font size/weight — plus icons: swap codicon glyphs, or point an
+ *  icon at an SVG (paste Lucide/animated SVG markup or a URL). Changes are applied via an
  *  injected stylesheet with `!important` overrides, persisted to localStorage (survives dev
  *  reloads), and can be copied as CSS or cleared.
  *
- *  Gated to dev surfaces (web dev server port 9888 + desktop dev build), same as the
- *  devAnnotation overlay. Never ship to end users.
+ *  The mode stays active across edits: close an inspector with ✕/Esc and keep clicking.
+ *  Gated to dev surfaces (web dev server port 9888 + desktop dev build). Never ship to users.
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { Codicon } from '../../../../base/common/codicons.js';
+import { getCodiconFontCharacters } from '../../../../base/common/codiconsUtil.js';
 import { registerAction2, Action2 } from '../../../../platform/actions/common/actions.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { IStatusbarService, StatusbarAlignment, type IStatusbarEntryAccessor } from '../../../services/statusbar/browser/statusbar.js';
 import { localize2 } from '../../../../nls.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 
 const STORAGE_KEY = 'fractalUi.overrides';
 const DEV_PORT = '9888';
+const TOGGLE_COMMAND = 'workbench.action.fractalUiEditMode';
 
 function isDevSurface(): boolean {
 	return location.port === DEV_PORT || (location.protocol === 'vscode-file:' && location.hostname === 'vscode-app');
 }
 
-/** All registered codicons, e.g. 'codicon-palette'. */
-const ALL_CODICONS: readonly string[] = Object.values(Codicon)
-	.map((c) => c.id)
-	.filter((id): id is string => typeof id === 'string' && id.startsWith('codicon-'))
-	.sort();
+/** Bare codicon names (no 'codicon-' prefix) + their codepoints. */
+const CODICON_GLYPHS: ReadonlyMap<string, number> = new Map(Object.entries(getCodiconFontCharacters()));
+const ALL_CODICONS: readonly string[] = [...CODICON_GLYPHS.keys()].sort();
 
 const STYLES = `
-.fui-fab{position:fixed;left:14px;bottom:14px;z-index:999999;display:flex;align-items:center;gap:6px;
-  background:#6f42c1;color:#fff;border:none;border-radius:20px;padding:8px 14px;font:600 12px/1 system-ui;
-  cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.4);}
-.fui-fab:hover{background:#7d4fd1;}
-.fui-fab.active{background:#a1260d;}
 .fui-hint{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:999998;background:#1e1e1e;
   color:#fff;border:1px solid #555;border-radius:4px;padding:6px 12px;font:12px system-ui;box-shadow:0 2px 8px rgba(0,0,0,.4);}
 .fui-target{outline:2px solid #6f42c1 !important;outline-offset:1px !important;cursor:crosshair !important;}
-.fui-popover{position:fixed;z-index:999999;width:300px;max-height:80vh;overflow-y:auto;background:#252526;border:1px solid #454545;
+.fui-popover{position:fixed;z-index:999999;width:320px;max-height:80vh;overflow-y:auto;background:#252526;border:1px solid #454545;
   border-radius:4px;box-shadow:0 4px 16px rgba(0,0,0,.5);font:12px system-ui;color:#cccccc;}
 .fui-popover-header{padding:6px 10px;font-weight:600;border-bottom:1px solid #3c3c3c;display:flex;justify-content:space-between;align-items:center;}
 .fui-popover-close{cursor:pointer;color:#888;}
@@ -50,10 +48,16 @@ const STYLES = `
 .fui-grid label{color:#bbb;}
 .fui-grid input[type=color]{width:34px;height:22px;padding:0;border:1px solid #555;background:none;cursor:pointer;}
 .fui-grid input[type=number]{width:64px;box-sizing:border-box;background:#1e1e1e;color:#fff;border:1px solid #454545;padding:3px 5px;font:11px system-ui;}
-.fui-grid select{width:100%;box-sizing:border-box;background:#1e1e1e;color:#fff;border:1px solid #454545;padding:3px 5px;font:11px system-ui;}
-.fui-row{display:flex;align-items:center;gap:8px;padding:2px 10px;}
+.fui-row{display:flex;align-items:center;gap:6px;padding:2px 10px;}
+.fui-row label{color:#bbb;min-width:92px;}
 .fui-row input[type=color]{width:34px;height:22px;padding:0;border:1px solid #555;background:none;cursor:pointer;}
 .fui-row input[type=text]{flex:1;box-sizing:border-box;background:#1e1e1e;color:#fff;border:1px solid #454545;padding:3px 5px;font:11px ui-monospace,Menlo,monospace;}
+.fui-row select{flex:1;box-sizing:border-box;background:#1e1e1e;color:#fff;border:1px solid #454545;padding:3px 5px;font:11px system-ui;}
+.fui-side-inputs{display:flex;gap:4px;flex:1;}
+.fui-side-inputs input{width:100%;box-sizing:border-box;background:#1e1e1e;color:#fff;border:1px solid #454545;padding:3px 4px;font:11px system-ui;text-align:center;}
+.fui-side-inputs input::placeholder{color:#666;}
+.fui-linkbtn{border:1px solid #454545;background:#2d2d2d;color:#ccc;border-radius:3px;padding:3px 6px;font:600 10px system-ui;cursor:pointer;}
+.fui-linkbtn:hover{background:#3a3a3a;}
 .fui-actions{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;border-top:1px solid #3c3c3c;}
 .fui-btn{border:none;border-radius:3px;padding:4px 10px;font:600 11px system-ui;cursor:pointer;}
 .fui-btn-apply{background:#0e639c;color:#fff;}
@@ -68,12 +72,17 @@ const STYLES = `
   border:none;padding:8px 10px;font:11px/1.4 ui-monospace,Menlo,monospace;}
 .fui-status{position:fixed;left:14px;bottom:52px;z-index:999998;background:#252526;color:#fff;border:1px solid #454545;
   border-radius:4px;padding:4px 10px;font:11px system-ui;box-shadow:0 2px 8px rgba(0,0,0,.4);}
+.fui-fab{position:fixed;left:14px;bottom:14px;z-index:999999;display:flex;align-items:center;gap:6px;
+  background:#6f42c1;color:#fff;border:none;border-radius:20px;padding:8px 14px;font:600 12px/1 system-ui;
+  cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.4);}
+.fui-fab:hover{background:#7d4fd1;}
+.fui-fab.active{background:#a1260d;}
 `;
 
 function isOverlayElement(target: Element): boolean {
 	let node: Element | null = target;
 	while (node) {
-		if (node.classList.contains('fui-fab') || node.classList.contains('fui-popover')) {
+		if (node.classList.contains('fui-popover') || node.classList.contains('fui-fab')) {
 			return true;
 		}
 		node = node.parentElement;
@@ -97,27 +106,41 @@ function uiSelector(target: Element): string {
 	return target.tagName.toLowerCase();
 }
 
-function codiconClassOf(target: Element): string | undefined {
+function codiconBareOf(target: Element): string | undefined {
 	let node: Element | null = target;
 	while (node && node !== document.body) {
-		const cls = (typeof node.className === 'string' ? node.className : '').split(/\s+/).find((c) => c.startsWith('codicon-') && c !== 'codicon');
+		const cls = (typeof node.className === 'string' ? node.className : '').split(/\s+/).find((c) => c.startsWith('codicon-'));
 		if (cls) {
-			return cls;
+			return cls.slice('codicon-'.length);
 		}
 		node = node.parentElement;
 	}
 	return undefined;
 }
 
-function codiconGlyph(codiconClass: string): string | undefined {
-	const probe = document.createElement('span');
-	probe.className = `codicon ${codiconClass}`;
-	probe.style.position = 'absolute';
-	probe.style.visibility = 'hidden';
-	document.body.appendChild(probe);
-	const content = getComputedStyle(probe, '::before').content;
-	probe.remove();
-	return content && content !== 'none' ? content : undefined;
+function glyphContent(bareName: string): string | undefined {
+	const cp = CODICON_GLYPHS.get(bareName);
+	return cp === undefined ? undefined : `"\\${cp.toString(16)}"`;
+}
+
+function toSvgDataUri(svgMarkup: string): string {
+	return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgMarkup.trim())}`;
+}
+
+function toHex(rgb: string): string {
+	if (/^#[0-9a-fA-F]{3,8}$/.test(rgb)) {
+		return rgb.length === 4 ? `#${rgb.slice(1).split('').map((c) => c + c).join('')}` : rgb;
+	}
+	const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+	if (m) {
+		const to = (n: number) => n.toString(16).padStart(2, '0');
+		return `#${to(+m[1])}${to(+m[2])}${to(+m[3])}`;
+	}
+	return '#000000';
+}
+
+function pxValue(css: string): number {
+	return parseFloat(css) || 0;
 }
 
 type Overrides = Record<string, Record<string, string>>;
@@ -130,13 +153,17 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 		FractalUiEditMode._instance?.toggleMode();
 	}
 
-	private fab: HTMLButtonElement | undefined;
+	private active = false;
 	private hint: HTMLDivElement | undefined;
+	private fab: HTMLButtonElement | undefined;
+	private statusAccessor: IStatusbarEntryAccessor | undefined;
 	private activeTarget: Element | undefined;
+	private popover: HTMLElement | undefined;
+	private popoverSelector = '';
 	private overrides: Overrides = {};
 	private liveStyle: HTMLStyleElement | undefined;
 
-	constructor() {
+	constructor(@IInstantiationService private readonly instantiationService: IInstantiationService) {
 		super();
 		if (!isDevSurface()) {
 			return;
@@ -167,18 +194,6 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 		this._register({ dispose: () => this.liveStyle?.remove() });
 		this.rebuildStyle();
 
-		this.fab = document.createElement('button');
-		this.fab.type = 'button';
-		this.fab.className = 'fui-fab';
-		this.fab.textContent = '🎨 UI Edit';
-		this.fab.title = 'Fractal UI Edit Mode — click any element to restyle it';
-		this.fab.addEventListener('click', (event) => {
-			event.stopPropagation();
-			this.toggleMode();
-		});
-		document.body.appendChild(this.fab);
-		this._register({ dispose: () => this.fab?.remove() });
-
 		this.hint = document.createElement('div');
 		this.hint.className = 'fui-hint';
 		this.hint.style.display = 'none';
@@ -188,16 +203,46 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 
 		document.addEventListener('keydown', this.onKeyDown);
 		this._register({ dispose: () => document.removeEventListener('keydown', this.onKeyDown) });
+
+		// Prefer the status bar; fall back to a floating button only if there is none.
+		try {
+			const entry = {
+				name: 'Fractal UI Edit',
+				text: '$(palette) UI Edit',
+				ariaLabel: 'Fractal UI Edit Mode',
+				tooltip: 'Fractal UI Edit Mode — click any element to restyle it',
+				command: TOGGLE_COMMAND
+			};
+			const accessor = this.instantiationService.invokeFunction((a) => a.get(IStatusbarService))
+				.addEntry(entry, 'status.fractalUiEdit', StatusbarAlignment.LEFT, 100);
+			this.statusAccessor = accessor;
+			this._register({ dispose: () => accessor.dispose() });
+		} catch {
+			this.mountFab();
+		}
+	}
+
+	private mountFab(): void {
+		this.fab = document.createElement('button');
+		this.fab.type = 'button';
+		this.fab.className = 'fui-fab';
+		this.fab.textContent = '🎨 UI Edit';
+		this.fab.addEventListener('click', (event) => {
+			event.stopPropagation();
+			this.toggleMode();
+		});
+		document.body.appendChild(this.fab);
+		this._register({ dispose: () => this.fab?.remove() });
+		this.updateFab();
 	}
 
 	private toggleMode(): void {
-		const active = this.fab?.classList.toggle('active') ?? false;
-		this.fab!.textContent = active ? '✕ Done' : '🎨 UI Edit';
+		this.active = !this.active;
 		if (this.hint) {
-			this.hint.style.display = active ? 'block' : 'none';
+			this.hint.style.display = this.active ? 'block' : 'none';
 		}
-		document.body.classList.toggle('fui-mode', active);
-		if (active) {
+		document.body.classList.toggle('fui-mode', this.active);
+		if (this.active) {
 			document.addEventListener('mouseover', this.onMouseOver, true);
 			document.addEventListener('mouseout', this.onMouseOut, true);
 			document.addEventListener('click', this.onClickCapture, true);
@@ -206,11 +251,38 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 			document.removeEventListener('mouseout', this.onMouseOut, true);
 			document.removeEventListener('click', this.onClickCapture, true);
 			this.clearTarget();
+			this.closePopover();
 		}
+		this.updateFab();
+		this.updateStatusEntry();
+	}
+
+	private updateFab(): void {
+		if (!this.fab) {
+			return;
+		}
+		this.fab.textContent = this.active ? '✕ Done' : '🎨 UI Edit';
+		this.fab.classList.toggle('active', this.active);
+	}
+
+	private updateStatusEntry(): void {
+		this.statusAccessor?.update({
+			name: 'Fractal UI Edit',
+			text: this.active ? '$(check) UI Edit' : '$(palette) UI Edit',
+			ariaLabel: 'Fractal UI Edit Mode',
+			tooltip: this.active ? 'UI Edit Mode active — click any element (Esc to exit)' : 'Fractal UI Edit Mode — click any element to restyle it',
+			command: TOGGLE_COMMAND,
+			backgroundColor: this.active ? '#6f42c1' : undefined
+		});
 	}
 
 	private readonly onKeyDown = (event: KeyboardEvent): void => {
-		if (event.key === 'Escape' && this.fab?.classList.contains('active')) {
+		if (event.key !== 'Escape') {
+			return;
+		}
+		if (this.popover) {
+			this.closePopover();
+		} else if (this.active) {
 			this.toggleMode();
 		}
 	};
@@ -243,16 +315,22 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 		}
 		event.preventDefault();
 		event.stopPropagation();
+		this.closePopover();
 		this.openInspector(target, event.clientX, event.clientY);
 	};
 
+	private closePopover(): void {
+		this.popover?.remove();
+		this.popover = undefined;
+	}
+
 	private openInspector(target: Element, x: number, y: number): void {
 		this.clearTarget();
-		this.toggleMode();
 
 		const selector = uiSelector(target);
-		const codicon = codiconClassOf(target);
+		const codiconBare = codiconBareOf(target);
 		const computed = getComputedStyle(target);
+		this.popoverSelector = selector;
 
 		const popover = document.createElement('div');
 		popover.className = 'fui-popover';
@@ -273,45 +351,76 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 		const grid = document.createElement('div');
 		grid.className = 'fui-grid';
 
-		const controls: { label: string; prop: string; value: string }[] = [
-			{ label: 'Background', prop: 'background-color', value: computed.backgroundColor },
-			{ label: 'Text color', prop: 'color', value: computed.color },
-			{ label: 'Border color', prop: 'border-color', value: computed.borderColor },
-			{ label: 'Border width (px)', prop: 'border-width', value: computed.borderWidth },
-			{ label: 'Border radius (px)', prop: 'border-radius', value: computed.borderRadius },
-			{ label: 'Padding (px)', prop: 'padding', value: computed.padding },
-			{ label: 'Font size (px)', prop: 'font-size', value: computed.fontSize },
-			{ label: 'Font weight', prop: 'font-weight', value: computed.fontWeight }
-		];
+		const addColorControl = (label: string, prop: string, value: string) => {
+			const lbl = document.createElement('label');
+			lbl.textContent = label;
+			const input = document.createElement('input');
+			input.type = 'color';
+			input.value = toHex(value);
+			input.addEventListener('input', () => this.apply(selector, prop, input.value));
+			grid.append(lbl, input);
+		};
 
-		const inputs: HTMLElement[] = [];
-		for (const c of controls) {
-			const label = document.createElement('label');
-			label.textContent = c.label;
-			const isColor = c.prop.endsWith('color');
-			const input = document.createElement(isColor ? 'input' : 'input') as HTMLInputElement;
-			if (isColor) {
-				input.type = 'color';
-				input.value = toHex(c.value);
-			} else {
-				input.type = 'number';
-				input.value = String(parseFloat(c.value) || 0);
-				input.min = '0';
-			}
-			const prop = c.prop;
-			input.addEventListener('input', () => {
-				const v = isColor ? input.value : `${input.value}px`;
-				this.apply(selector, prop, v);
-			});
-			grid.append(label, input);
-			inputs.push(input);
+		const addNumberControl = (label: string, prop: string, value: string) => {
+			const lbl = document.createElement('label');
+			lbl.textContent = label;
+			const input = document.createElement('input');
+			input.type = 'number';
+			input.value = String(pxValue(value));
+			input.min = '0';
+			input.addEventListener('input', () => this.apply(selector, prop, `${input.value}px`));
+			grid.append(lbl, input);
+		};
+
+		addColorControl('Background', 'background-color', computed.backgroundColor);
+		addColorControl('Text color', 'color', computed.color);
+		addColorControl('Border color', 'border-color', computed.borderColor);
+		addNumberControl('Font size (px)', 'font-size', computed.fontSize);
+
+		// Font weight
+		const fwLabel = document.createElement('label');
+		fwLabel.textContent = 'Font weight';
+		const fw = document.createElement('select');
+		for (const w of ['400', '500', '600', '700']) {
+			const opt = document.createElement('option');
+			opt.value = w;
+			opt.textContent = w;
+			opt.selected = Math.round(pxValue(computed.fontWeight)).toString() === w;
+			fw.appendChild(opt);
 		}
+		fw.addEventListener('change', () => this.apply(selector, 'font-weight', fw.value));
+		grid.append(fwLabel, fw);
+
+		popover.append(header, selBox, grid);
+
+		// Per-side controls: border width, border radius, padding
+		this.addSideControl(popover, 'Border width', 'border-width', {
+			top: computed.borderTopWidth,
+			right: computed.borderRightWidth,
+			bottom: computed.borderBottomWidth,
+			left: computed.borderLeftWidth
+		}, selector);
+		this.addSideControl(popover, 'Border radius', 'border-radius', {
+			top: computed.borderTopLeftRadius,
+			right: computed.borderTopRightRadius,
+			bottom: computed.borderBottomRightRadius,
+			left: computed.borderBottomLeftRadius
+		}, selector);
+		this.addSideControl(popover, 'Padding', 'padding', {
+			top: computed.paddingTop,
+			right: computed.paddingRight,
+			bottom: computed.paddingBottom,
+			left: computed.paddingLeft
+		}, selector);
+
+		// Icons: codicon swap + SVG support
+		this.addIconControl(popover, selector, codiconBare);
 
 		const actions = document.createElement('div');
 		actions.className = 'fui-actions';
 		const apply = document.createElement('button');
 		apply.className = 'fui-btn fui-btn-apply';
-		apply.textContent = 'Apply';
+		apply.textContent = 'Done';
 		const copy = document.createElement('button');
 		copy.className = 'fui-btn fui-btn-copy';
 		copy.textContent = 'Copy CSS';
@@ -328,24 +437,20 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 		cssBox.readOnly = true;
 		cssBox.value = this.cssFor(selector);
 
-		popover.append(header, selBox, grid, actions, cssBox);
+		popover.append(actions, cssBox);
 
-		const clampedX = Math.min(Math.max(12, x), window.innerWidth - 320);
-		const clampedY = Math.min(Math.max(12, y), window.innerHeight - 480);
+		const clampedX = Math.min(Math.max(12, x), window.innerWidth - 340);
+		const clampedY = Math.min(Math.max(12, y), window.innerHeight - 560);
 		popover.style.left = `${clampedX}px`;
 		popover.style.top = `${clampedY}px`;
 		document.body.appendChild(popover);
+		this.popover = popover;
+		this._register({ dispose: () => popover.remove() });
 
-		const disposePopover = () => popover.remove();
-		close.addEventListener('click', disposePopover);
+		close.addEventListener('click', () => this.closePopover());
 		popover.addEventListener('click', (event) => event.stopPropagation());
-		this._register({ dispose: disposePopover });
 
-		apply.addEventListener('click', () => {
-			apply.textContent = 'Applied ✓';
-			setTimeout(() => { apply.textContent = 'Apply'; }, 1200);
-		});
-
+		apply.addEventListener('click', () => this.closePopover());
 		copy.addEventListener('click', () => {
 			const css = this.cssFor(selector);
 			navigator.clipboard.writeText(css).then(() => this.showStatus('CSS copied ✓', false)).catch(() => {
@@ -353,49 +458,136 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 				cssBox.select();
 			});
 		});
-
 		reset.addEventListener('click', () => {
 			this.removeSelector(selector);
 			this.showStatus('Reset', false);
 		});
-
 		clearAll.addEventListener('click', () => {
 			this.overrides = {};
 			this.rebuildStyle();
 			this.showStatus('All overrides cleared', false);
 		});
 
-		// Icon picker (only when the element is (or contains) a codicon)
-		if (codicon) {
-			const row = document.createElement('div');
-			row.className = 'fui-row';
-			const label = document.createElement('label');
-			label.textContent = 'Icon';
-			const pick = document.createElement('select');
-			const current = codiconGlyph(codicon);
-			for (const id of ALL_CODICONS) {
-				const opt = document.createElement('option');
-				opt.value = id;
-				opt.textContent = id.replace('codicon-', '');
-				opt.selected = id === codicon;
-				pick.appendChild(opt);
+		this.showStatus(`Editing ${selector} — stays active, click another element`, false);
+	}
+
+	private addSideControl(parent: HTMLElement, label: string, prop: string, sides: { top: string; right: string; bottom: string; left: string }, selector: string): void {
+		const row = document.createElement('div');
+		row.className = 'fui-row';
+		const lbl = document.createElement('label');
+		lbl.textContent = label;
+
+		const linkBtn = document.createElement('button');
+		linkBtn.type = 'button';
+		linkBtn.className = 'fui-linkbtn';
+		linkBtn.title = 'Toggle: all sides together / each side separately';
+
+		const inputsHost = document.createElement('div');
+		inputsHost.className = 'fui-side-inputs';
+
+		const buildLinked = () => {
+			inputsHost.replaceChildren();
+			linkBtn.textContent = '🔗 all';
+			const all = document.createElement('input');
+			all.type = 'number';
+			all.min = '0';
+			all.value = String(pxValue(sides.top));
+			all.addEventListener('input', () => this.apply(selector, prop, `${all.value}px`));
+			inputsHost.appendChild(all);
+		};
+
+		const buildSides = () => {
+			inputsHost.replaceChildren();
+			linkBtn.textContent = '⊞ sides';
+			const parts: [string, string, string][] = [
+				['T', 'top', sides.top],
+				['R', 'right', sides.right],
+				['B', 'bottom', sides.bottom],
+				['L', 'left', sides.left]
+			];
+			for (const [hint, side, value] of parts) {
+				const input = document.createElement('input');
+				input.type = 'number';
+				input.min = '0';
+				input.placeholder = hint;
+				input.value = String(pxValue(value));
+				const propName = `${prop}-${side}`;
+				input.addEventListener('input', () => this.apply(selector, propName, `${input.value}px`));
+				inputsHost.appendChild(input);
 			}
-			const glyphBox = document.createElement('input');
-			glyphBox.type = 'text';
-			glyphBox.placeholder = 'glyph (auto)';
-			glyphBox.value = current ?? '';
-			pick.addEventListener('change', () => {
-				const glyph = codiconGlyph(pick.value);
-				if (glyph) {
-					this.apply(`.${codicon}::before`, 'content', glyph);
-					glyphBox.value = glyph;
-				}
-			});
-			row.append(label, pick, glyphBox);
-			popover.insertBefore(row, actions);
+		};
+
+		let linked = true;
+		buildLinked();
+		linkBtn.addEventListener('click', () => {
+			linked = !linked;
+			if (linked) {
+				buildLinked();
+			} else {
+				buildSides();
+			}
+		});
+
+		row.append(lbl, linkBtn, inputsHost);
+		parent.appendChild(row);
+	}
+
+	private addIconControl(parent: HTMLElement, selector: string, codiconBare: string | undefined): void {
+		const row = document.createElement('div');
+		row.className = 'fui-row';
+		const lbl = document.createElement('label');
+		lbl.textContent = 'Icon';
+
+		const pick = document.createElement('select');
+		const currentGlyph = codiconBare ? glyphContent(codiconBare) : undefined;
+		for (const bare of ALL_CODICONS) {
+			const opt = document.createElement('option');
+			opt.value = bare;
+			opt.textContent = bare;
+			opt.selected = bare === codiconBare;
+			pick.appendChild(opt);
 		}
 
-		this.showStatus(`Editing ${selector}`, false);
+		const svgInput = document.createElement('input');
+		svgInput.type = 'text';
+		svgInput.placeholder = 'Paste <svg>… or https://… for the icon';
+		svgInput.title = 'Paste an SVG (Lucide/custom, may be animated) or a URL to use instead of the codicon glyph';
+
+		if (codiconBare) {
+			const cls = `codicon-${codiconBare}`;
+			pick.addEventListener('change', () => {
+				const content = glyphContent(pick.value);
+				if (content) {
+					this.apply(`.${cls}::before`, 'content', content);
+					this.removeSelectorProp(`.${cls}::before`, 'background-image');
+					this.showStatus(`Icon → ${pick.value}`, false);
+				}
+			});
+			svgInput.addEventListener('change', () => {
+				const v = svgInput.value.trim();
+				if (!v) {
+					return;
+				}
+				const uri = v.startsWith('<svg') ? toSvgDataUri(v) : v;
+				this.apply(`.${cls}::before`, 'content', `''`);
+				this.apply(`.${cls}::before`, 'background-image', `url("${uri}")`);
+				this.apply(`.${cls}::before`, 'background-size', 'contain');
+				this.apply(`.${cls}::before`, 'background-position', 'center');
+				this.apply(`.${cls}::before`, 'background-repeat', 'no-repeat');
+				this.apply(`.${cls}::before`, 'width', '1em');
+				this.apply(`.${cls}::before`, 'height', '1em');
+				this.showStatus('SVG icon applied', false);
+			});
+			row.append(lbl, pick, svgInput);
+		} else {
+			row.append(lbl, svgInput);
+			row.title = 'No codicon found on this element; paste an SVG/URL to style it via CSS selector.';
+		}
+		parent.appendChild(row);
+
+		if (currentGlyph) {
+			svgInput.placeholder = `Paste <svg>… or URL (current: ${codiconBare})`;
+		}
 	}
 
 	private apply(selector: string, prop: string, value: string): void {
@@ -403,11 +595,29 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 		existing[prop] = value;
 		this.overrides[selector] = existing;
 		this.rebuildStyle();
+		this.refreshCssBox();
+	}
+
+	private removeSelectorProp(selector: string, prop: string): void {
+		const existing = this.overrides[selector];
+		if (existing) {
+			delete existing[prop];
+			this.rebuildStyle();
+			this.refreshCssBox();
+		}
 	}
 
 	private removeSelector(selector: string): void {
 		delete this.overrides[selector];
 		this.rebuildStyle();
+		this.refreshCssBox();
+	}
+
+	private refreshCssBox(): void {
+		const cssBox = this.popover?.querySelector<HTMLTextAreaElement>('.fui-css');
+		if (cssBox) {
+			cssBox.value = this.cssFor(this.popoverSelector);
+		}
 	}
 
 	private cssFor(selector: string): string {
@@ -445,22 +655,10 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 	}
 }
 
-function toHex(rgb: string): string {
-	if (/^#[0-9a-fA-F]{3,8}$/.test(rgb)) {
-		return rgb.length === 4 ? `#${rgb.slice(1).split('').map((c) => c + c).join('')}` : rgb;
-	}
-	const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-	if (m) {
-		const to = (n: number) => n.toString(16).padStart(2, '0');
-		return `#${to(+m[1])}${to(+m[2])}${to(+m[3])}`;
-	}
-	return '#000000';
-}
-
 registerAction2(class extends Action2 {
 	constructor() {
 		super({
-			id: 'workbench.action.fractalUiEditMode',
+			id: TOGGLE_COMMAND,
 			title: localize2('fractalUi.toggle', 'Fractal: Toggle UI Edit Mode'),
 			f1: true
 		});

@@ -1,77 +1,131 @@
-# Visual Studio Code - Open Source ("Code - OSS")
-[![Feature Requests](https://img.shields.io/github/issues/microsoft/vscode/feature-request.svg)](https://github.com/microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc)
-[![Bugs](https://img.shields.io/github/issues/microsoft/vscode/bug.svg)](https://github.com/microsoft/vscode/issues?utf8=✓&q=is%3Aissue+is%3Aopen+label%3Abug)
-[![Gitter](https://img.shields.io/badge/chat-on%20gitter-yellow.svg)](https://gitter.im/Microsoft/vscode)
-
-## The Repository
-
-This repository ("`Code - OSS`") is where we (Microsoft) develop the [Visual Studio Code](https://code.visualstudio.com) product together with the community. Not only do we work on code and issues here, but we also publish our [roadmap](https://github.com/microsoft/vscode/wiki/Roadmap), [monthly iteration plans](https://github.com/microsoft/vscode/wiki/Iteration-Plans), and our [endgame plans](https://github.com/microsoft/vscode/wiki/Running-the-Endgame). This source code is available to everyone under the standard [MIT license](https://github.com/microsoft/vscode/blob/main/LICENSE.txt).
-
-## Visual Studio Code
+# Fractal VS Code
 
 <p align="center">
-  <img alt="VS Code in action" src="https://github.com/user-attachments/assets/56af271c-949d-454c-a3ea-16188c063414">
+  <img alt="Fractal VS Code logo" src="logomotif.png" width="120">
 </p>
 
-[Visual Studio Code](https://code.visualstudio.com) is a distribution of the `Code - OSS` repository with Microsoft-specific customizations released under a traditional [Microsoft product license](https://code.visualstudio.com/License/).
+A personal fork of [Visual Studio Code](https://github.com/microsoft/vscode) (`Code - OSS`,
+MIT license) built around one goal: **chat with any model via API — no Copilot sign-in
+required** — plus a growing set of dev tools for customizing the editor itself.
 
-[Visual Studio Code](https://code.visualstudio.com) combines the simplicity of a code editor with what developers need for their core edit-build-debug cycle. It provides comprehensive code editing, navigation, and understanding support along with lightweight debugging, a rich extensibility model, and lightweight integration with existing tools.
+This repo is a fork of `microsoft/vscode` (upstream commit `add9a510`), kept as the
+`upstream` remote for future merges. Our remote is `fractalmandala/fractal-vscode` (private).
 
-Visual Studio Code is updated monthly with new features and bug fixes. You can download it for Windows, macOS, and Linux on the [Visual Studio Code website](https://code.visualstudio.com/Download). To get the latest releases every day, install the [Insiders build](https://code.visualstudio.com/insiders).
+---
 
-## Contributing
+## What's different from stock VS Code
 
-There are many ways in which you can participate in this project, for example:
+Everything below is a deliberate fork change. The rest of the codebase is upstream VS Code.
 
-* [Submit bugs and feature requests](https://github.com/microsoft/vscode/issues), and help us verify them as they are checked in
-* Review [source code changes](https://github.com/microsoft/vscode/pulls)
-* Review the [documentation](https://github.com/microsoft/vscode-docs) and make pull requests for anything from typos to new content.
+### 1. Chat with any model via API (the headline feature)
 
-If you are interested in fixing issues and contributing directly to the codebase, please see the document [How to Contribute](https://github.com/microsoft/vscode/wiki/How-to-Contribute), which covers the following:
+Stock VS Code's chat works signed-out via the **BYOK (Bring Your Own Key) Custom Endpoint**
+provider, which ships inside the in-repo `extensions/copilot` extension:
 
-* [How to build and run from source](https://github.com/microsoft/vscode/wiki/How-to-Contribute)
-* [The development workflow, including debugging and running tests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#debugging)
-* [Coding guidelines](https://github.com/microsoft/vscode/wiki/Coding-Guidelines)
-* [Submitting pull requests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#pull-requests)
-* [Finding an issue to work on](https://github.com/microsoft/vscode/wiki/How-to-Contribute#where-to-contribute)
-* [Contributing to translations](https://aka.ms/vscodeloc)
+- **Models → Add Models → Custom Endpoint** → provider config lives in
+  `chatLanguageModels.json` (`vendor: customendpoint`, `apiType: chat-completions`,
+  per-model `id` / `url` / `toolCalling` / `vision` / `maxInputTokens` / `maxOutputTokens`).
+- API keys are stored as `${input:...}` secret references (keyring), never in the file.
+- Works with any OpenAI-compatible endpoint: OpenRouter, Tokenrouter, Groq, LM Studio,
+  Ollama, vLLM, or a local mock server. QA'd end-to-end against a mock OpenAI server
+  (streaming, error paths, Stop mid-stream).
 
-## Feedback
+**No modifications to the 1,173-file chat core were needed** — this is built on the stable
+extension API (`vscode.lm.registerLanguageModelChatProvider` / `vscode.chat.createChatAgent`),
+so it's ours to extend without forking chat internals.
 
-* Ask a question on [Stack Overflow](https://stackoverflow.com/questions/tagged/vscode)
-* [Request a new feature](CONTRIBUTING.md)
-* Upvote [popular feature requests](https://github.com/microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc)
-* [File an issue](https://github.com/microsoft/vscode/issues)
-* Connect with the extension author community on [GitHub Discussions](https://github.com/microsoft/vscode-discussions/discussions) or [Slack](https://aka.ms/vscode-dev-community)
-* Follow [@code](https://x.com/code) and let us know what you think!
+### 2. Copilot surfaces hidden (BYOK-only stance)
 
-See our [wiki](https://github.com/microsoft/vscode/wiki/Feedback-Channels) for a description of each of these channels and information on some other available community-driven channels.
+Since this build never signs in to GitHub Copilot, the **Copilot session type is removed**
+from the New Chat widget and the main chat harness picker:
 
-## Related Projects
+- `src/vs/sessions/contrib/chat/browser/sessionTypePicker.ts` — filters out the
+  `copilotcli` / `agent-host-copilotcli` session types.
+- `src/vs/workbench/contrib/chat/browser/widget/input/sessionTargetPickerActionItem.ts` —
+  hides the `AgentHostCopilot` item.
 
-Many of the core components and extensions to VS Code live in their own repositories on GitHub. For example, the [node debug adapter](https://github.com/microsoft/vscode-node-debug) and the [mono debug adapter](https://github.com/microsoft/vscode-mono-debug) repositories are separate from each other. For a complete list, please visit the [Related Projects](https://github.com/microsoft/vscode/wiki/Related-Projects) page on our [wiki](https://github.com/microsoft/vscode/wiki).
+### 3. Annotation overlay (dev tool)
 
-## Bundled Extensions
+A `✎ Annotate` button (bottom-right, dev builds only) that pins notes on any UI element
+and posts them to a local annotation server (`:4747`), so an agent can read feedback via
+`GET /pending`. Gated with `isDevSurface()` to web dev (port 9888) and desktop dev
+(`vscode-file://vscode-app`) — a production packaging step must gate it off.
 
-VS Code includes a set of built-in extensions located in the [extensions](extensions) folder, including grammars and snippets for many languages. Extensions that provide rich language support (inline suggestions, Go to Definition) for a language have the suffix `language-features`. For example, the `json` extension provides coloring for `JSON` and the `json-language-features` extension provides rich language support for `JSON`.
+- `src/vs/workbench/contrib/devAnnotation/browser/devAnnotationOverlay.ts`
 
-## Development Container
+### 4. Fractal UI Edit Mode (dev tool)
 
-This repository includes a Visual Studio Code Dev Containers / GitHub Codespaces development container.
+A `🎨 UI Edit` status-bar toggle (or command palette: **Fractal: Toggle UI Edit Mode**)
+that turns any element in the workbench into a live-styling target: background/text/border
+colors, border width, radius, padding, font size/weight (per-side controls included),
+plus a full codicon picker and SVG-icon-ready hooks. Overrides persist across reloads
+(localStorage) and can be copied as CSS or reset per-element.
 
-* For [Dev Containers](https://aka.ms/vscode-remote/download/containers), use the **Dev Containers: Clone Repository in Container Volume...** command, which creates a Docker volume for better disk I/O on macOS and Windows.
-  * If you already have VS Code and Docker installed, you can also click [here](https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/microsoft/vscode) to get started. This will cause VS Code to automatically install the Dev Containers extension if needed, clone the source code into a container volume, and spin up a dev container for use.
+- `src/vs/workbench/contrib/fractalUi/browser/fractalUiEditMode.ts`
+- Registered in both the main workbench and the Agents window (`sessions.common.main.ts`).
 
-* For Codespaces, install the [GitHub Codespaces](https://marketplace.visualstudio.com/items?itemName=GitHub.codespaces) extension in VS Code, and use the **Codespaces: Create New Codespace** command.
+### 5. Extensions gallery (Open VSX)
 
-Docker / the Codespace should have at least **4 cores and 6 GB of RAM (8 GB recommended)** to run a full build. See the [development container README](.devcontainer/README.md) for more information.
+The OSS build ships without a marketplace, so the Extensions view couldn't load results.
+`product.json` now points the gallery at **Open VSX**.
 
-## Code of Conduct
+### 6. Branding
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information, see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+The app icon is `logomotif.png`, rendered to:
+
+- `resources/darwin/code.icns` (macOS app icon)
+- `resources/linux/code.png` (512×512)
+- `resources/win32/code.ico` (Windows)
+
+---
+
+## Building and running
+
+Requires **Node 24** (this machine: `fnm exec --using=24.19.0`). See `handoff.md` for the
+full setup notes and gotchas.
+
+```bash
+npm ci                                   # install (large; main + remote + extension deps)
+npm run compile                          # out/ build (client + copilot extension)
+npm run compile-web                      # web-extension dist for the browser build
+./scripts/code.sh                        # desktop dev app (Electron)
+./scripts/code-web.sh --port 9888        # web dev server
+```
+
+### Production build + DMG
+
+```bash
+npx gulp vscode-darwin-arm64             # produces VSCode-darwin-arm64/Code - OSS.app
+# then package a DMG (hdiutil):
+hdiutil create -volname "Fractal VS Code" -srcfolder VSCode-darwin-arm64/Code\ -\ OSS.app \
+  -ov -format UDZO Fractal-VS-Code.dmg
+```
+
+Notes:
+
+- `vscode-darwin-arm64` builds the copilot extension from source; on first run the packaging
+  can hit a transient `lstat .../shims.txt` race with the extension's postinstall — re-running
+  the task resolves it (the `@github/copilot` tree is then fully materialized).
+- Long-running dev processes should be launched detached
+  (`subprocess.Popen(..., start_new_session=True)`) so they survive shell reaping.
+
+## Layout
+
+- `src/vs/workbench/contrib/devAnnotation/` — annotation overlay (dev tool)
+- `src/vs/workbench/contrib/fractalUi/` — UI Edit Mode (dev tool)
+- `extensions/copilot/` — in-repo copilot-chat extension (BYOK provider lives here)
+- `handoff.md` — session handoff / context contract for agents working on this fork
+- `logomotif.png` — the app logo/icon source
+
+## Contributing to upstream
+
+This fork's upstream is `microsoft/vscode`. For anything not specific to the fork, prefer
+contributing upstream — see the [VS Code contribution guide](https://github.com/microsoft/vscode/blob/main/CONTRIBUTING.md).
 
 ## License
 
 Copyright (c) Microsoft Corporation. All rights reserved.
 
-Licensed under the [MIT](LICENSE.txt) license.
+Licensed under the [MIT](LICENSE.txt) license. The fork retains the upstream MIT license;
+fork changes are subject to the same terms. Microsoft product name, logos, and the "Visual
+Studio Code" trademark remain property of their respective owners.
