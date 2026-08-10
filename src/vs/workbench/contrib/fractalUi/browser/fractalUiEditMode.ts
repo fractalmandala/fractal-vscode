@@ -1,16 +1,17 @@
 /*---------------------------------------------------------------------------------------------
- *  Fractal — UI Edit Mode (dev-only).
+ *  Fractal — UI Edit Mode (fork utility).
  *
  *  Toggle from the status bar ("🎨 UI Edit", left side) or the command palette
  *  ("Fractal: Toggle UI Edit Mode"). While active, click any element in the workbench to
  *  restyle it live: background/text/border colors, border width + radius, padding (each
- *  with per-side control), font size/weight — plus icons: swap codicon glyphs, or point an
- *  icon at an SVG (paste Lucide/animated SVG markup or a URL). Changes are applied via an
- *  injected stylesheet with `!important` overrides, persisted to localStorage (survives dev
- *  reloads), and can be copied as CSS or cleared.
+ *  with per-side control), font size/weight — plus icons: swap codicon glyphs, upload a
+ *  custom SVG (file picker, pasted markup, or URL), and attach raw custom CSS per element.
+ *  Changes are applied via an injected stylesheet with `!important` overrides, persisted
+ *  to localStorage (survives reloads), and can be copied as CSS or cleared.
  *
  *  The mode stays active across edits: close an inspector with ✕/Esc and keep clicking.
- *  Gated to dev surfaces (web dev server port 9888 + desktop dev build). Never ship to users.
+ *  Fork customization: a first-class utility of this fork's builds — active on desktop
+ *  builds (vscode-file://) and the web dev server (port 9888).
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
@@ -22,6 +23,7 @@ import { localize2 } from '../../../../nls.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 
 const STORAGE_KEY = 'fractalUi.overrides';
+const CUSTOM_CSS_KEY = 'fractalUi.customCss';
 const DEV_PORT = '9888';
 const TOGGLE_COMMAND = 'workbench.action.fractalUiEditMode';
 
@@ -70,6 +72,10 @@ const STYLES = `
 .fui-btn-clear:hover{background:#7d3520;}
 .fui-css{display:none;width:100%;box-sizing:border-box;min-height:90px;resize:vertical;background:#1e1e1e;color:#9cdcfe;
   border:none;padding:8px 10px;font:11px/1.4 ui-monospace,Menlo,monospace;}
+.fui-csswrap{padding:6px 10px 8px;border-top:1px dashed #3c3c3c;}
+.fui-csswrap label{display:block;color:#bbb;margin-bottom:4px;}
+.fui-csstext{display:block;width:100%;box-sizing:border-box;min-height:72px;resize:vertical;background:#1e1e1e;color:#9cdcfe;
+  border:1px solid #454545;padding:6px 8px;font:11px/1.4 ui-monospace,Menlo,monospace;}
 .fui-status{position:fixed;left:14px;bottom:52px;z-index:999998;background:#252526;color:#fff;border:1px solid #454545;
   border-radius:4px;padding:4px 10px;font:11px system-ui;box-shadow:0 2px 8px rgba(0,0,0,.4);}
 .fui-fab{position:fixed;left:14px;bottom:14px;z-index:999999;display:flex;align-items:center;gap:6px;
@@ -123,6 +129,18 @@ function glyphContent(bareName: string): string | undefined {
 	return cp === undefined ? undefined : `"\\${cp.toString(16)}"`;
 }
 
+/** Stable selector for an <svg> element; falls back to "<parent selector> svg". */
+function svgSelectorOf(svg: Element, parentSelector: string): string {
+	if (svg.id) {
+		return `#${svg.id}`;
+	}
+	const cls = (svg.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+	if (cls.length) {
+		return `svg.${cls.slice(0, 3).join('.')}`;
+	}
+	return `${parentSelector} svg`;
+}
+
 function toSvgDataUri(svgMarkup: string): string {
 	return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgMarkup.trim())}`;
 }
@@ -161,6 +179,7 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 	private popover: HTMLElement | undefined;
 	private popoverSelector = '';
 	private overrides: Overrides = {};
+	private customCss: Record<string, string> = {};
 	private liveStyle: HTMLStyleElement | undefined;
 
 	constructor(@IInstantiationService private readonly instantiationService: IInstantiationService) {
@@ -179,6 +198,12 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 			this.overrides = raw ? JSON.parse(raw) as Overrides : {};
 		} catch {
 			this.overrides = {};
+		}
+		try {
+			const rawCss = localStorage.getItem(CUSTOM_CSS_KEY);
+			this.customCss = rawCss ? JSON.parse(rawCss) as Record<string, string> : {};
+		} catch {
+			this.customCss = {};
 		}
 	}
 
@@ -413,8 +438,11 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 			left: computed.paddingLeft
 		}, selector);
 
-		// Icons: codicon swap + SVG support
-		this.addIconControl(popover, selector, codiconBare);
+		// Icons: codicon swap + custom SVG upload
+		this.addIconControl(popover, selector, codiconBare, target);
+
+		// Raw custom CSS for this element
+		this.addCustomCssControl(popover, selector);
 
 		const actions = document.createElement('div');
 		actions.className = 'fui-actions';
@@ -464,6 +492,7 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 		});
 		clearAll.addEventListener('click', () => {
 			this.overrides = {};
+			this.customCss = {};
 			this.rebuildStyle();
 			this.showStatus('All overrides cleared', false);
 		});
@@ -532,28 +561,21 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 		parent.appendChild(row);
 	}
 
-	private addIconControl(parent: HTMLElement, selector: string, codiconBare: string | undefined): void {
-		const row = document.createElement('div');
-		row.className = 'fui-row';
-		const lbl = document.createElement('label');
-		lbl.textContent = 'Icon';
-
-		const pick = document.createElement('select');
-		const currentGlyph = codiconBare ? glyphContent(codiconBare) : undefined;
-		for (const bare of ALL_CODICONS) {
-			const opt = document.createElement('option');
-			opt.value = bare;
-			opt.textContent = bare;
-			opt.selected = bare === codiconBare;
-			pick.appendChild(opt);
-		}
-
-		const svgInput = document.createElement('input');
-		svgInput.type = 'text';
-		svgInput.placeholder = 'Paste <svg>… or https://… for the icon';
-		svgInput.title = 'Paste an SVG (Lucide/custom, may be animated) or a URL to use instead of the codicon glyph';
-
+	private addIconControl(parent: HTMLElement, selector: string, codiconBare: string | undefined, target: Element): void {
+		// Codicon glyph swap (only when the element carries a codicon-* class)
 		if (codiconBare) {
+			const row = document.createElement('div');
+			row.className = 'fui-row';
+			const lbl = document.createElement('label');
+			lbl.textContent = 'Icon';
+			const pick = document.createElement('select');
+			for (const bare of ALL_CODICONS) {
+				const opt = document.createElement('option');
+				opt.value = bare;
+				opt.textContent = bare;
+				opt.selected = bare === codiconBare;
+				pick.appendChild(opt);
+			}
 			const cls = `codicon-${codiconBare}`;
 			pick.addEventListener('change', () => {
 				const content = glyphContent(pick.value);
@@ -563,31 +585,110 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 					this.showStatus(`Icon → ${pick.value}`, false);
 				}
 			});
-			svgInput.addEventListener('change', () => {
-				const v = svgInput.value.trim();
-				if (!v) {
-					return;
-				}
-				const uri = v.startsWith('<svg') ? toSvgDataUri(v) : v;
-				this.apply(`.${cls}::before`, 'content', `''`);
-				this.apply(`.${cls}::before`, 'background-image', `url("${uri}")`);
-				this.apply(`.${cls}::before`, 'background-size', 'contain');
-				this.apply(`.${cls}::before`, 'background-position', 'center');
-				this.apply(`.${cls}::before`, 'background-repeat', 'no-repeat');
-				this.apply(`.${cls}::before`, 'width', '1em');
-				this.apply(`.${cls}::before`, 'height', '1em');
-				this.showStatus('SVG icon applied', false);
-			});
-			row.append(lbl, pick, svgInput);
-		} else {
-			row.append(lbl, svgInput);
-			row.title = 'No codicon found on this element; paste an SVG/URL to style it via CSS selector.';
+			row.append(lbl, pick);
+			parent.appendChild(row);
 		}
-		parent.appendChild(row);
 
-		if (currentGlyph) {
-			svgInput.placeholder = `Paste <svg>… or URL (current: ${codiconBare})`;
+		// Custom SVG: upload a .svg file, or paste markup / a URL
+		const row = document.createElement('div');
+		row.className = 'fui-row';
+		const lbl = document.createElement('label');
+		lbl.textContent = 'Custom SVG';
+
+		const uploadBtn = document.createElement('button');
+		uploadBtn.type = 'button';
+		uploadBtn.className = 'fui-linkbtn';
+		uploadBtn.textContent = 'Upload…';
+		uploadBtn.title = 'Upload a .svg file to replace this icon';
+		const fileInput = document.createElement('input');
+		fileInput.type = 'file';
+		fileInput.accept = '.svg,image/svg+xml';
+		fileInput.style.display = 'none';
+		uploadBtn.addEventListener('click', () => fileInput.click());
+		fileInput.addEventListener('change', () => {
+			const file = fileInput.files?.[0];
+			if (!file) {
+				return;
+			}
+			const reader = new FileReader();
+			reader.onload = () => {
+				const markup = String(reader.result ?? '');
+				if (markup.includes('<svg')) {
+					this.applySvgIcon(target, selector, codiconBare, toSvgDataUri(markup));
+				} else {
+					this.showStatus('That file is not an SVG', true);
+				}
+			};
+			reader.onerror = () => this.showStatus('Could not read the file', true);
+			reader.readAsText(file);
+		});
+
+		const svgInput = document.createElement('input');
+		svgInput.type = 'text';
+		svgInput.placeholder = codiconBare ? `…or paste <svg>… / URL (current: ${codiconBare})` : 'Paste <svg>… markup or https://… URL';
+		svgInput.title = 'Paste an SVG (Lucide/custom, may be animated) or a URL to use instead of the current icon';
+		svgInput.addEventListener('change', () => {
+			const v = svgInput.value.trim();
+			if (!v) {
+				return;
+			}
+			this.applySvgIcon(target, selector, codiconBare, v.startsWith('<svg') ? toSvgDataUri(v) : v);
+		});
+
+		row.append(lbl, uploadBtn, fileInput, svgInput);
+		parent.appendChild(row);
+	}
+
+	/** Replace the inspected icon with a custom SVG (data URI or URL). */
+	private applySvgIcon(target: Element, selector: string, codiconBare: string | undefined, uri: string): void {
+		if (codiconBare) {
+			// Codicon glyph element: blank the font glyph, draw the SVG as background of ::before
+			const s = `.codicon-${codiconBare}::before`;
+			this.apply(s, 'content', `''`);
+			this.apply(s, 'display', 'inline-block');
+			this.apply(s, 'width', '1em');
+			this.apply(s, 'height', '1em');
+			this.apply(s, 'background-image', `url("${uri}")`);
+			this.apply(s, 'background-size', 'contain');
+			this.apply(s, 'background-position', 'center');
+			this.apply(s, 'background-repeat', 'no-repeat');
+		} else {
+			// Real <svg> icon (or any element): hide the original shapes, draw the SVG as background
+			const svg = target.closest('svg') ?? target.querySelector('svg');
+			const s = svg ? svgSelectorOf(svg, selector) : selector;
+			if (svg) {
+				this.apply(`${s} *`, 'display', 'none');
+			}
+			this.apply(s, 'background-image', `url("${uri}")`);
+			this.apply(s, 'background-size', 'contain');
+			this.apply(s, 'background-position', 'center');
+			this.apply(s, 'background-repeat', 'no-repeat');
 		}
+		this.showStatus('Custom SVG applied', false);
+	}
+
+	/** Raw CSS editor: injected verbatim for the inspected element, persisted per selector. */
+	private addCustomCssControl(parent: HTMLElement, selector: string): void {
+		const wrap = document.createElement('div');
+		wrap.className = 'fui-csswrap';
+		const lbl = document.createElement('label');
+		lbl.textContent = 'Custom CSS (raw, injected verbatim)';
+		const area = document.createElement('textarea');
+		area.className = 'fui-csstext';
+		area.spellcheck = false;
+		area.placeholder = `/* raw CSS for this element, e.g.\n${selector} { color: #f00 !important; }\n${selector}::before { transform: scale(1.2); } */`;
+		area.value = this.customCss[selector] ?? '';
+		area.addEventListener('input', () => {
+			if (area.value.trim()) {
+				this.customCss[selector] = area.value;
+			} else {
+				delete this.customCss[selector];
+			}
+			this.rebuildStyle();
+			this.refreshCssBox();
+		});
+		wrap.append(lbl, area);
+		parent.appendChild(wrap);
 	}
 
 	private apply(selector: string, prop: string, value: string): void {
@@ -609,6 +710,7 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 
 	private removeSelector(selector: string): void {
 		delete this.overrides[selector];
+		delete this.customCss[selector];
 		this.rebuildStyle();
 		this.refreshCssBox();
 	}
@@ -623,7 +725,15 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 	private cssFor(selector: string): string {
 		const props = this.overrides[selector] ?? {};
 		const decls = Object.entries(props).map(([k, v]) => `\t${k}: ${v} !important;`).join('\n');
-		return decls ? `${selector} {\n${decls}\n}` : '';
+		const parts: string[] = [];
+		if (decls) {
+			parts.push(`${selector} {\n${decls}\n}`);
+		}
+		const raw = (this.customCss[selector] ?? '').trim();
+		if (raw) {
+			parts.push(raw);
+		}
+		return parts.join('\n');
 	}
 
 	private rebuildStyle(): void {
@@ -637,9 +747,15 @@ export class FractalUiEditMode extends Disposable implements IWorkbenchContribut
 				blocks.push(`${selector} {\n${decls}\n}`);
 			}
 		}
+		for (const raw of Object.values(this.customCss)) {
+			if (raw.trim()) {
+				blocks.push(raw.trim());
+			}
+		}
 		this.liveStyle.textContent = blocks.join('\n');
 		try {
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(this.overrides));
+			localStorage.setItem(CUSTOM_CSS_KEY, JSON.stringify(this.customCss));
 		} catch {
 			// storage full/unavailable — keep going for the session
 		}

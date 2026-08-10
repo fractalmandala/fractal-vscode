@@ -503,7 +503,9 @@ import './contrib/onboardingTours/browser/onboardingTours.contribution.js';
 
 import './services/sessions/browser/sessionsManagementService.js';
 
-// Dev QA tooling (dev-only): annotation overlay + Fractal UI Edit Mode
-import '../workbench/contrib/devAnnotation/browser/devAnnotationOverlay.js';
+// Fractal UI Edit Mode (fork utility: click-to-inspect restyling + custom SVG/CSS icons)
 import '../workbench/contrib/fractalUi/browser/fractalUiEditMode.js';
+
+// Fractal Notepad (fork utility: .md notes view in the secondary side bar)
+import '../workbench/contrib/fractalNotes/browser/fractalNotesView.js';
 //#endregion

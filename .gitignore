@@ -49,3 +49,7 @@ dist
 .github/prompts/*.local.prompt.md
 .agents/skills/.local/
 .github/skills/.local/
+
+# Build artifacts / downloaded extension packages (not source)
+*.dmg
+*.vsix

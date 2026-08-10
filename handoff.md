@@ -62,6 +62,33 @@ platform layer.
 - **Docs rewritten:** README.md (fork + changes-vs-original), AGENTS.md (fork agent
   instructions), handoff.md (this file). LICENSE.txt kept verbatim (upstream MIT).
 
+## Status after 2026-08-10 session 3 — Annotate removed + UI Edit icon upload
+
+- **Annotate overlay removed entirely.** The `✎ Annotate` fab leaked into the main
+  (production) build because `isDevSurface()` treated the desktop `vscode-file://vscode-app`
+  origin as dev — true for packaged builds too. Removed at user request: deleted
+  `devAnnotationOverlay.ts` and its imports in `workbench.common.main.ts` +
+  `sessions.common.main.ts`. Recover from git history (or the SideX backup) if the `:4747`
+  agentation workflow is ever wanted back.
+- **UI Edit is a first-class fork utility** (user wants it in the main build). Inspector gains:
+  - **Custom SVG upload** — `Upload…` file picker (`.svg`), alongside paste-markup/URL field.
+    Codicon elements: glyph blanked, SVG drawn on `::before`. Real `<svg>` icons: original
+    shapes hidden, SVG becomes the background. Any other element: background on the element,
+    raw CSS below covers exotic cases.
+  - **Raw custom CSS editor** — per-selector textarea, injected verbatim into the live
+    stylesheet, persisted to `fractalUi.customCss` (localStorage), included in Copy CSS and
+    cleared by Reset element / Clear all.
+- **Node gotcha:** repo `.nvmrc` now pins `24.18.0` (upstream bump) but the machine has
+  24.19.0 — fnm auto-use prompts on every `cd`. Run builds without cd:
+  `fnm exec --using=24.19.0 -- npm --prefix /Users/amrit/fractal-vscode run compile-client`
+  (or `fnm install 24.18.0` once).
+- **Notepad utility** (`src/vs/workbench/contrib/fractalNotes/browser/fractalNotesView.ts`):
+  `Notes` view in the secondary side bar (auxiliary bar), registered in both windows. First
+  open asks for a folder (native dialog, any location) stored app-wide in
+  `fractalNotes.folder` (StorageScope.APPLICATION). `+ New note` creates
+  `YYYY-MM-DD_HH-MM-SS.md` and opens it in the editor; list shows all `.md` files sorted by
+  mtime; ✎ renames (file rename via quick input); live-refresh via file watcher.
+
 ## Where things live
 
 - **Fork (target):** `/Users/amrit/fractal-vscode` — clone of `microsoft/vscode` (shallow,

@@ -296,11 +296,11 @@ import './contrib/debug/browser/callStackEditorContribution.js';
 import './contrib/debug/browser/repl.js';
 import './contrib/debug/browser/debugViewlet.js';
 
-// Dev annotation overlay (SideX QA tooling — active only on dev surfaces)
-import './contrib/devAnnotation/browser/devAnnotationOverlay.js';
-
-// Fractal UI Edit Mode (dev-only UI customization)
+// Fractal UI Edit Mode (fork utility: click-to-inspect restyling + custom SVG/CSS icons)
 import './contrib/fractalUi/browser/fractalUiEditMode.js';
+
+// Fractal Notepad (fork utility: .md notes view in the secondary side bar)
+import './contrib/fractalNotes/browser/fractalNotesView.js';
 
 // Markers
 import './contrib/markers/browser/markers.contribution.js';
